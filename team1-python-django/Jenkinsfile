@@ -1,0 +1,87 @@
+pipeline {
+agent any
+
+```
+environment {
+    DOCKERHUB_USER = 'praveen3km'
+    IMAGE_NAME = 'cloudcart'
+    IMAGE_TAG = 'MD'
+    FULL_IMAGE_NAME = 'praveen3km/cloudcart:MD'
+}
+
+stages {
+
+    stage('Code Cloning') {
+        steps {
+            echo 'Cloning CloudCart source code'
+            git branch: 'main',
+                url: 'https://github.com/Praveen093-ctr/Cloud-cart.git'
+        }
+    }
+
+    stage('Build Docker Image') {
+        steps {
+            echo 'Building Docker image'
+            sh 'docker build -t ${FULL_IMAGE_NAME} .'
+        }
+    }
+
+    stage('Docker Login and Push') {
+        steps {
+            echo 'Pushing Docker image to Docker Hub'
+
+            withCredentials([
+                usernamePassword(
+                    credentialsId: 'dockerhub-credentials',
+                    usernameVariable: 'DOCKERHUB_USER_CRED',
+                    passwordVariable: 'DOCKERHUB_PASS'
+                )
+            ]) {
+                sh '''
+                    set +x
+                    echo "$DOCKERHUB_PASS" | docker login \
+                        -u "$DOCKERHUB_USER_CRED" \
+                        --password-stdin
+
+                    docker push "$FULL_IMAGE_NAME"
+                '''
+            }
+        }
+    }
+
+    // Enable this stage after configuring Kubernetes credentials
+    // and verifying your deployment manifest paths.
+
+    /*
+    stage('Deploy to Kubernetes') {
+        steps {
+            echo 'Deploying CloudCart to Kubernetes'
+
+            withKubeConfig(credentialsId: 'kubeconfig') {
+                sh '''
+                    kubectl apply -f deployment.yaml
+                    kubectl apply -f service.yaml
+                    kubectl rollout status deployment/cloudcart-deployment
+                '''
+            }
+        }
+    }
+    */
+}
+
+post {
+    success {
+        echo 'CloudCart CI pipeline completed successfully.'
+    }
+
+    failure {
+        echo 'Pipeline failed. Check the Jenkins console output.'
+    }
+
+    always {
+        sh 'docker logout || true'
+    }
+}
+```
+
+}
