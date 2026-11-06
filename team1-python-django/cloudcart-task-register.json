@@ -1,0 +1,81 @@
+{
+  "containerDefinitions": [
+    {
+      "name": "cloudcart-container",
+      "image": "175921209962.dkr.ecr.ap-southeast-2.amazonaws.com/cloudcart:latest",
+      "cpu": 0,
+      "portMappings": [
+        {
+          "containerPort": 8000,
+          "hostPort": 8000,
+          "protocol": "tcp",
+          "name": "cloudcart-container-8000-tcp",
+          "appProtocol": "http"
+        }
+      ],
+      "essential": true,
+      "environment": [
+        {
+          "name": "DB_PORT",
+          "value": "3306"
+        },
+        {
+          "name": "DB_USER",
+          "value": "cloudcartadmin"
+        },
+        {
+          "name": "DB_NAME",
+          "value": "cloudcart"
+        },
+        {
+          "name": "DB_HOST",
+          "value": "cloudcart-mysql.c3m6ye6a8vp9.ap-southeast-2.rds.amazonaws.com"
+        },
+        {
+          "name": "DEBUG",
+          "value": "False"
+        }
+      ],
+      "environmentFiles": [],
+      "mountPoints": [],
+      "volumesFrom": [],
+      "ulimits": [],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/cloudcart",
+          "awslogs-create-group": "true",
+          "awslogs-region": "ap-southeast-2",
+          "awslogs-stream-prefix": "ecs"
+        },
+        "secretOptions": []
+      },
+      "systemControls": [],
+      "secrets": [
+        {
+          "name": "DB_PASSWORD",
+          "valueFrom": "arn:aws:ssm:ap-southeast-2:175921209962:parameter/cloudcart/dev/DB_PASSWORD"
+        },
+        {
+          "name": "DJANGO_SECRET_KEY",
+          "valueFrom": "arn:aws:ssm:ap-southeast-2:175921209962:parameter/cloudcart/dev/DJANGO_SECRET_KEY"
+        }
+      ]
+    }
+  ],
+  "family": "CloudCart-Task",
+  "executionRoleArn": "arn:aws:iam::175921209962:role/CloudCart-ECS-Execution-Role",
+  "networkMode": "awsvpc",
+  "volumes": [],
+  "placementConstraints": [],
+  "runtimePlatform": {
+    "cpuArchitecture": "X86_64",
+    "operatingSystemFamily": "LINUX"
+  },
+  "requiresCompatibilities": [
+    "FARGATE"
+  ],
+  "cpu": "256",
+  "memory": "512",
+  "enableFaultInjection": false
+}

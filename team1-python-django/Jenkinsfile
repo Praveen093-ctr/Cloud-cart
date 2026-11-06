@@ -1,87 +1,335 @@
 pipeline {
-agent any
+    agent any
 
-```
-environment {
-    DOCKERHUB_USER = 'praveen3km'
-    IMAGE_NAME = 'cloudcart'
-    IMAGE_TAG = 'MD'
-    FULL_IMAGE_NAME = 'praveen3km/cloudcart:MD'
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+    }
+
+    environment {
+        AWS_REGION = 'ap-southeast-2'
+        AWS_ACCOUNT_ID = '175921209962'
+
+        ECR_REGISTRY = '175921209962.dkr.ecr.ap-southeast-2.amazonaws.com'
+        ECR_REPOSITORY = 'cloudcart'
+
+        ECS_CLUSTER = 'CloudCart-ECS-Cluster'
+        ECS_SERVICE = 'CloudCart-ECS-Service'
+
+        TASK_DEFINITION_FILE = 'team1-python-django/cloudcart-task-register.json'
+        TASK_DEFINITION_FAMILY = 'CloudCart-Task'
+
+        EXPECTED_EXECUTION_ROLE = 'arn:aws:iam::175921209962:role/CloudCart-ECS-Execution-Role'
+
+        ALB_HEALTH_URL = 'http://CloudCart-ALB-192803012.ap-southeast-2.elb.amazonaws.com/health/'
+
+        AWS_PAGER = ''
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                checkout scm
+
+                sh '''
+                    set -eu
+                    echo "Checking CloudCart project files"
+
+                    test -f team1-python-django/Dockerfile
+                    test -f "$TASK_DEFINITION_FILE"
+
+                    git rev-parse --short HEAD
+                '''
+            }
+        }
+
+        stage('Validate AWS Access') {
+            steps {
+                sh '''
+                    set -eu
+
+                    echo "Checking required tools"
+
+                    command -v aws
+                    command -v docker
+                    command -v python3
+                    command -v curl
+
+                    echo "Checking AWS identity"
+
+                    ACCOUNT=$(aws sts get-caller-identity \
+                        --query Account --output text)
+
+                    if [ "$ACCOUNT" != "$AWS_ACCOUNT_ID" ]; then
+                        echo "Incorrect AWS account"
+                        exit 1
+                    fi
+
+                    CALLER_ARN=$(aws sts get-caller-identity \
+                        --query Arn --output text)
+
+                    case "$CALLER_ARN" in
+                        arn:aws:sts::175921209962:assumed-role/CloudCart-Jenkins-EC2-Role/*)
+                            echo "Correct Jenkins IAM role"
+                            ;;
+                        *)
+                            echo "Unexpected IAM identity: $CALLER_ARN"
+                            exit 1
+                            ;;
+                    esac
+
+                    docker info >/dev/null
+
+                    aws ecr describe-repositories \
+                        --repository-names "$ECR_REPOSITORY" \
+                        --region "$AWS_REGION" >/dev/null
+
+                    aws ecs describe-clusters \
+                        --clusters "$ECS_CLUSTER" \
+                        --region "$AWS_REGION" \
+                        --query 'clusters[0].status' \
+                        --output text | grep -qx ACTIVE
+
+                    aws ecs describe-services \
+                        --cluster "$ECS_CLUSTER" \
+                        --services "$ECS_SERVICE" \
+                        --region "$AWS_REGION" \
+                        --query 'services[0].status' \
+                        --output text | grep -qx ACTIVE
+
+                    echo "AWS validation successful"
+                '''
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                script {
+                    env.IMAGE_TAG = "build-${env.BUILD_NUMBER}"
+                    env.IMAGE_URI = "${env.ECR_REGISTRY}/${env.ECR_REPOSITORY}:${env.IMAGE_TAG}"
+                }
+
+                sh '''
+                    set -eu
+
+                    echo "Building CloudCart Docker image"
+
+                    docker build --pull \
+                        -t "$IMAGE_URI" \
+                        team1-python-django
+
+                    echo "Image built: $IMAGE_URI"
+                '''
+            }
+        }
+
+        stage('ECR Authentication') {
+            steps {
+                sh '''
+                    set -eu
+
+                    echo "Authenticating with Amazon ECR"
+
+                    aws ecr get-login-password \
+                        --region "$AWS_REGION" |
+                    docker login \
+                        --username AWS \
+                        --password-stdin "$ECR_REGISTRY"
+                '''
+            }
+        }
+
+        stage('Push Image to ECR') {
+            steps {
+                sh '''
+                    set -eu
+
+                    docker push "$IMAGE_URI"
+
+                    echo "Docker image pushed successfully"
+                '''
+            }
+        }
+
+        stage('Prepare ECS Task Definition') {
+            steps {
+                sh '''
+python3 - "$TASK_DEFINITION_FILE" "$IMAGE_URI" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+source = Path(sys.argv[1])
+image = sys.argv[2]
+
+with source.open() as f:
+    task = json.load(f)
+
+if task.get("family") != "CloudCart-Task":
+    raise SystemExit("Unexpected task definition family")
+
+expected_role = (
+    "arn:aws:iam::175921209962:role/"
+    "CloudCart-ECS-Execution-Role"
+)
+
+if task.get("executionRoleArn") != expected_role:
+    raise SystemExit("Unexpected ECS execution role")
+
+containers = task.get("containerDefinitions", [])
+
+container = next(
+    (c for c in containers if c.get("name") == "cloudcart-container"),
+    None
+)
+
+if container is None:
+    raise SystemExit("cloudcart-container not found")
+
+ports = container.get("portMappings", [])
+
+if not any(p.get("containerPort") == 8000 for p in ports):
+    raise SystemExit("Expected container port 8000")
+
+secret_names = {
+    s.get("name")
+    for s in container.get("secrets", [])
 }
 
-stages {
+required_secrets = {"DB_PASSWORD", "DJANGO_SECRET_KEY"}
 
-    stage('Code Cloning') {
-        steps {
-            echo 'Cloning CloudCart source code'
-            git branch: 'main',
-                url: 'https://github.com/Praveen093-ctr/Cloud-cart.git'
+if not required_secrets.issubset(secret_names):
+    raise SystemExit("Required SSM secret references are missing")
+
+environment_names = {
+    e.get("name")
+    for e in container.get("environment", [])
+}
+
+if required_secrets.intersection(environment_names):
+    raise SystemExit(
+        "Sensitive values must be configured through ECS secrets, "
+        "not plain environment variables"
+    )
+
+container["image"] = image
+
+output = Path("rendered-task-definition.json")
+
+with output.open("w") as f:
+    json.dump(task, f, indent=2)
+
+print("Task definition prepared successfully")
+print("Image:", image)
+print("Secrets: SSM references verified")
+print("Output:", output)
+PY
+                '''
+            }
         }
-    }
 
-    stage('Build Docker Image') {
-        steps {
-            echo 'Building Docker image'
-            sh 'docker build -t ${FULL_IMAGE_NAME} .'
+        stage('Register ECS Task Definition') {
+            steps {
+                script {
+                    env.TASK_DEFINITION_ARN = sh(
+                        returnStdout: true,
+                        script: '''
+                            aws ecs register-task-definition \
+                                --cli-input-json file://rendered-task-definition.json \
+                                --region "$AWS_REGION" \
+                                --query 'taskDefinition.taskDefinitionArn' \
+                                --output text
+                        '''
+                    ).trim()
+
+                    if (!env.TASK_DEFINITION_ARN.startsWith(
+                        "arn:aws:ecs:ap-southeast-2:175921209962:task-definition/CloudCart-Task:"
+                    )) {
+                        error("Unexpected ECS task definition ARN")
+                    }
+
+                    echo "Registered: ${env.TASK_DEFINITION_ARN}"
+                }
+            }
         }
-    }
 
-    stage('Docker Login and Push') {
-        steps {
-            echo 'Pushing Docker image to Docker Hub'
-
-            withCredentials([
-                usernamePassword(
-                    credentialsId: 'dockerhub-credentials',
-                    usernameVariable: 'DOCKERHUB_USER_CRED',
-                    passwordVariable: 'DOCKERHUB_PASS'
-                )
-            ]) {
+        stage('Deploy to ECS') {
+            steps {
                 sh '''
-                    set +x
-                    echo "$DOCKERHUB_PASS" | docker login \
-                        -u "$DOCKERHUB_USER_CRED" \
-                        --password-stdin
+                    set -eu
 
-                    docker push "$FULL_IMAGE_NAME"
+                    aws ecs update-service \
+                        --cluster "$ECS_CLUSTER" \
+                        --service "$ECS_SERVICE" \
+                        --task-definition "$TASK_DEFINITION_ARN" \
+                        --region "$AWS_REGION"
+
+                    echo "ECS deployment initiated"
+                '''
+            }
+        }
+
+        stage('Wait for ECS Stability') {
+            steps {
+                sh '''
+                    set -eu
+
+                    echo "Waiting for ECS service stability"
+
+                    aws ecs wait services-stable \
+                        --cluster "$ECS_CLUSTER" \
+                        --services "$ECS_SERVICE" \
+                        --region "$AWS_REGION"
+
+                    aws ecs describe-services \
+                        --cluster "$ECS_CLUSTER" \
+                        --services "$ECS_SERVICE" \
+                        --region "$AWS_REGION" \
+                        --query 'services[0].[status,desiredCount,runningCount,pendingCount,taskDefinition]' \
+                        --output table
+
+                    echo "ECS service is stable"
+                '''
+            }
+        }
+
+        stage('Application Health Check') {
+            steps {
+                sh '''
+                    set -eu
+
+                    echo "Checking CloudCart application health"
+
+                    for attempt in $(seq 1 18); do
+
+                        if curl -fsS "$ALB_HEALTH_URL" >/dev/null; then
+                            echo "CloudCart health check passed"
+                            exit 0
+                        fi
+
+                        echo "Attempt $attempt failed. Retrying..."
+                        sleep 10
+                    done
+
+                    echo "CloudCart health check failed"
+                    exit 1
                 '''
             }
         }
     }
 
-    // Enable this stage after configuring Kubernetes credentials
-    // and verifying your deployment manifest paths.
+    post {
+        success {
+            echo 'CloudCart CI/CD deployment completed successfully.'
+        }
 
-    /*
-    stage('Deploy to Kubernetes') {
-        steps {
-            echo 'Deploying CloudCart to Kubernetes'
+        failure {
+            echo 'CloudCart pipeline failed. Check Jenkins Console Output.'
+        }
 
-            withKubeConfig(credentialsId: 'kubeconfig') {
-                sh '''
-                    kubectl apply -f deployment.yaml
-                    kubectl apply -f service.yaml
-                    kubectl rollout status deployment/cloudcart-deployment
-                '''
-            }
+        always {
+            sh 'docker logout "$ECR_REGISTRY" >/dev/null 2>&1 || true'
         }
     }
-    */
-}
-
-post {
-    success {
-        echo 'CloudCart CI pipeline completed successfully.'
-    }
-
-    failure {
-        echo 'Pipeline failed. Check the Jenkins console output.'
-    }
-
-    always {
-        sh 'docker logout || true'
-    }
-}
-```
-
 }

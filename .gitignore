@@ -1,0 +1,29 @@
+# CloudCart secrets
+/team1-python-django/cloudcart-task.json
+/team1-python-django/.env
+/team1-python-django/.env.*
+!/team1-python-django/.env.example
+
+# Temporary deployment files
+/team1-python-django/rendered-task-definition.json
+
+# Private keys and credentials
+*.pem
+*.key
+
+# Python generated files
+__pycache__/
+*.py[cod]
+*.sqlite3
+.venv/
+venv/
+.pytest_cache/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# IDE files
+.vscode/
+.idea/

@@ -1,9 +1,11 @@
+import os
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = "replace-me-read-from-ssm-parameter-store"
-DEBUG = True
+SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "development-only-key")
+DEBUG = os.environ.get("DEBUG", "False") == "True"
+
 ALLOWED_HOSTS = ["*"]
 
 INSTALLED_APPS = [
@@ -20,12 +22,15 @@ MIDDLEWARE = [
 ROOT_URLCONF = "cloudcart.urls"
 WSGI_APPLICATION = "cloudcart.wsgi.application"
 
-# Local default. In Test/QA & above, point this at the shared
-# self-managed EC2 database using values read from SSM Parameter Store.
 DATABASES = {
     "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
+        "ENGINE": "django.db.backends.mysql",
+        "NAME": os.environ.get("DB_NAME", "cloudcart"),
+        "USER": os.environ.get("DB_USER", "cloudcartadmin"),
+        "PASSWORD": os.environ.get("DB_PASSWORD", ""),
+        "HOST": os.environ.get("DB_HOST", ""),
+        "PORT": os.environ.get("DB_PORT", "3306"),
+        "CONN_MAX_AGE": 60,
     }
 }
 
