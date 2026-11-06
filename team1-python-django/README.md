@@ -29,3 +29,9 @@ docker run -p 8000:8000 cloudcart-python
 - Expand `products/models.py` and `products/views.py` with real
   CloudCart fields (price, stock, category, etc).
 - Push the image to ECR and wire it into the shared CI/CD pipeline.
+
+## CI/CD Automation
+
+CloudCart uses Jenkins SCM polling to detect changes pushed to the main branch.
+The pipeline builds the Docker image, pushes it to Amazon ECR, and deploys it
+to Amazon ECS Fargate.
