@@ -215,6 +215,16 @@ if required_secrets.intersection(environment_names):
 
 container["image"] = image
 
+container["healthCheck"] = {
+    "command": [
+        "CMD-SHELL",
+        "python -c 'import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:8000/health/\", timeout=3)'"
+    ],
+    "interval": 30,
+    "timeout": 5,
+    "retries": 3,
+    "startPeriod": 60
+}
 output = Path("rendered-task-definition.json")
 
 with output.open("w") as f:
