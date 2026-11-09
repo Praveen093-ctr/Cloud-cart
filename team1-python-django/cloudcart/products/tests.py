@@ -63,3 +63,12 @@ class ProductAPITests(TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(Product.objects.count(), 0)
+
+    def test_list_products_with_browser_html_accept(self):
+        response = self.client.get(
+            "/api/products/",
+            HTTP_ACCEPT="text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("text/html", response["Content-Type"])
