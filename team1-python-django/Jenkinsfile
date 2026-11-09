@@ -267,6 +267,17 @@ PY
             }
         }
 
+        stage('Manual Production Approval') {
+            steps {
+                timeout(time: 10, unit: 'MINUTES') {
+                    input(
+                        message: "Approve deployment of ${TASK_DEFINITION_ARN} to ${ECS_SERVICE} in ${AWS_REGION}?",
+                        ok: 'Approve deployment'
+                    )
+                }
+            }
+        }
+
         stage('Deploy to ECS') {
             steps {
                 sh '''
