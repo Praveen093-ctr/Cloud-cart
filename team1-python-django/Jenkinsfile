@@ -103,6 +103,24 @@ pipeline {
             }
         }
 
+        stage('Automated Django Tests') {
+            steps {
+                sh '''
+                    set -eu
+
+                    echo "Running CloudCart Django automated tests"
+
+                    docker run --rm \\
+                        -v "$WORKSPACE/team1-python-django:/app" \\
+                        -w /app/cloudcart \\
+                        python:3.12-slim \\
+                        sh -c "pip install --no-cache-dir Django==5.0.6 djangorestframework==3.15.2 && python manage.py test products --settings=cloudcart.test_settings --verbosity=2"
+
+                    echo "All Django tests passed"
+                '''
+            }
+        }
+
         stage('Build Docker Image') {
             steps {
                 script {
