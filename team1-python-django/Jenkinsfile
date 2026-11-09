@@ -114,7 +114,7 @@ pipeline {
                         -v "$WORKSPACE/team1-python-django:/app" \\
                         -w /app/cloudcart \\
                         python:3.12-slim \\
-                        sh -c "pip install --no-cache-dir Django==5.0.6 djangorestframework==3.15.2 && python manage.py test products --settings=cloudcart.test_settings --verbosity=2"
+                        sh -c "pip install --no-cache-dir Django==5.2.19 djangorestframework==3.18.3 && python manage.py test products --settings=cloudcart.test_settings --verbosity=2"
 
                     echo "All Django tests passed"
                 '''
@@ -139,6 +139,68 @@ pipeline {
 
                     echo "Image built: $IMAGE_URI"
                 '''
+            }
+        }
+
+        stage('Trivy Security Scan') {
+            steps {
+                sh '''
+                    set -eu
+
+                    echo "Scanning CloudCart Docker image"
+
+                    mkdir -p "$WORKSPACE/.trivy-cache"
+
+                    echo "Generating HIGH and CRITICAL vulnerability report"
+
+                    docker run --rm \
+                        -v /var/run/docker.sock:/var/run/docker.sock \
+                        -v "$WORKSPACE/.trivy-cache:/root/.cache/" \
+                        -v "$WORKSPACE:/work" \
+                        aquasec/trivy:0.76.2 \
+                        image \
+                        --scanners vuln \
+                        --severity HIGH,CRITICAL \
+                        --exit-code 0 \
+                        --format json \
+                        --output /work/trivy-report.json \
+                        "$IMAGE_URI"
+                '''
+
+                echo 'Archiving Trivy vulnerability report'
+                archiveArtifacts artifacts: 'trivy-report.json',
+                                 allowEmptyArchive: false,
+                                 fingerprint: true
+
+                sh '''
+                    set -eu
+
+                    echo "Checking for CRITICAL vulnerabilities"
+
+                    docker run --rm \
+                        -v /var/run/docker.sock:/var/run/docker.sock \
+                        -v "$WORKSPACE/.trivy-cache:/root/.cache/" \
+                        aquasec/trivy:0.76.2 \
+                        image \
+                        --scanners vuln \
+                        --severity CRITICAL \
+                        --exit-code 1 \
+                        "$IMAGE_URI"
+
+                    echo "No CRITICAL vulnerabilities detected"
+                    echo "HIGH findings are documented for manual review"
+                '''
+            }
+        }
+
+        stage('Manual Production Approval') {
+            steps {
+                timeout(time: 10, unit: 'MINUTES') {
+                    input(
+                        message: "Review archived trivy-report.json for HIGH findings, then approve pushing ${IMAGE_URI} to ECR and deploying to ${ECS_SERVICE} in ${AWS_REGION}?",
+                        ok: 'Approve deployment'
+                    )
+                }
             }
         }
 
@@ -281,17 +343,6 @@ PY
                     }
 
                     echo "Registered: ${env.TASK_DEFINITION_ARN}"
-                }
-            }
-        }
-
-        stage('Manual Production Approval') {
-            steps {
-                timeout(time: 10, unit: 'MINUTES') {
-                    input(
-                        message: "Approve deployment of ${TASK_DEFINITION_ARN} to ${ECS_SERVICE} in ${AWS_REGION}?",
-                        ok: 'Approve deployment'
-                    )
                 }
             }
         }
