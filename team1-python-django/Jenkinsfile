@@ -114,7 +114,7 @@ pipeline {
                         -v "$WORKSPACE/team1-python-django:/app" \\
                         -w /app/cloudcart \\
                         python:3.12-slim \\
-                        sh -c "pip install --no-cache-dir Django==5.2.19 djangorestframework==3.18.3 && python manage.py test products --settings=cloudcart.test_settings --verbosity=2"
+                        sh -c "pip install --no-cache-dir Django==5.2.19 djangorestframework==3.18.3 PyMySQL==1.1.2 && python manage.py test products --settings=cloudcart.test_settings --verbosity=2"
 
                     echo "All Django tests passed"
                 '''
